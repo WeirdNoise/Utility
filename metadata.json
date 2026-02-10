@@ -1,0 +1,7 @@
+{
+  "name": "AudioAlchemy AI",
+  "description": "Une suite complète de conversion et de traitement audio alimentée par l'IA. Convertissez des formats, transcrivez de l'audio en texte et générez de la parole à partir de texte.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
