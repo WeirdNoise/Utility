@@ -63,7 +63,9 @@ export default function App() {
   // --- WEB AUDIO API REFERENCES ---
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
-  const AUDIO_PATH = '/sounds/MusiqueDuJeu.mp3';
+  
+  // Mise à jour du chemin vers le fichier WAV demandé
+  const AUDIO_PATH = '/sounds/VieuxGueule.wav';
 
   // Initialize Audio Context & Load File
   useEffect(() => {
@@ -76,26 +78,26 @@ export default function App() {
         audioContextRef.current = ctx;
 
         addLog(`FETCH: Téléchargement de ${AUDIO_PATH}...`);
-        const response = await fetch(AUDIO_PATH);
         
-        if (!response.ok) {
-          throw new Error(`Erreur HTTP ${response.status} pour le fichier audio.`);
-        }
-        
-        const arrayBuffer = await response.arrayBuffer();
-        addLog(`DECODAGE: Décodage du fichier audio (${arrayBuffer.byteLength} bytes)...`);
-        
-        // Décodage des données audio
         try {
-          const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
-          audioBufferRef.current = decodedBuffer;
-          addLog(`SUCCÈS: Audio chargé en mémoire ! Durée: ${decodedBuffer.duration.toFixed(2)}s`);
-        } catch (decodeErr: any) {
-          addLog(`ERREUR DECODAGE: Le fichier est peut-être corrompu ou format non supporté. ${decodeErr.message}`);
+            const response = await fetch(AUDIO_PATH);
+            if (!response.ok) throw new Error(`Status ${response.status} (File not found)`);
+            
+            const arrayBuffer = await response.arrayBuffer();
+            addLog(`DECODAGE: Décodage du fichier WAV (${arrayBuffer.byteLength} bytes)...`);
+            
+            // Tentative de décodage
+            const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
+            audioBufferRef.current = decodedBuffer;
+            addLog(`SUCCÈS: Audio chargé ! Durée: ${decodedBuffer.duration.toFixed(2)}s`);
+            
+        } catch (loadErr: any) {
+            addLog(`ERREUR CHARGEMENT: Impossible de charger ${AUDIO_PATH}. ${loadErr.message}`);
+            addLog("Assurez-vous que le fichier 'VieuxGueule.wav' est bien dans le dossier 'public/sounds/'.");
         }
 
       } catch (e: any) {
-        addLog(`ERREUR INITIALISATION AUDIO: ${e.message}`);
+        addLog(`ERREUR CRITIQUE AUDIO: ${e.message}`);
       }
     };
 
@@ -111,7 +113,7 @@ export default function App() {
   // Fonction pour jouer le son à la fin via Web Audio API
   const notifyEnd = () => {
     if (!audioContextRef.current || !audioBufferRef.current) {
-      addLog("ERREUR NOTIFY: AudioContext non prêt ou buffer vide.");
+      addLog("ERREUR NOTIFY: AudioContext non prêt ou fichier audio non chargé.");
       return;
     }
 
@@ -121,7 +123,7 @@ export default function App() {
       source.buffer = audioBufferRef.current;
       source.connect(audioContextRef.current.destination);
       source.start(0);
-      addLog("NOTIFY: Commande de lecture envoyée.");
+      addLog("NOTIFY: Lecture lancée !");
     } catch (e: any) {
       addLog(`ERREUR PLAY: ${e.message}`);
     }
@@ -667,9 +669,9 @@ export default function App() {
             ) : (
               debugLogs.map((log, i) => (
                 <div key={i} className={`
-                  ${log.includes("ERREUR") ? "text-red-400" : ""}
-                  ${log.includes("RÉSEAU OK") || log.includes("SUCCÈS") ? "text-green-400" : ""}
-                  ${!log.includes("ERREUR") && !log.includes("SUCCÈS") ? "text-slate-300" : ""}
+                  ${log.includes("ERREUR") || log.includes("ECHEC") ? "text-red-400" : ""}
+                  ${log.includes("SUCCÈS") ? "text-green-400" : ""}
+                  ${!log.includes("ERREUR") && !log.includes("ECHEC") && !log.includes("SUCCÈS") ? "text-slate-300" : ""}
                 `}>
                   {log}
                 </div>
