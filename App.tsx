@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   FileAudio, 
   Mic, 
@@ -51,6 +51,23 @@ export default function App() {
   // Global Error
   const [error, setError] = useState<string | null>(null);
 
+  // Audio Notification Reference
+  const notificationAudio = useRef<HTMLAudioElement | null>(null);
+
+  // Initialize Audio
+  useEffect(() => {
+    // Note: Assurez-vous que le fichier existe dans public/sounds/MusiqueDuJeu.mp3
+    notificationAudio.current = new Audio('/sounds/MusiqueDuJeu.mp3');
+    notificationAudio.current.volume = 0.5; // Volume confortable
+  }, []);
+
+  // Fonction pour jouer le son à la fin
+  const notifyEnd = () => {
+    if (notificationAudio.current) {
+      notificationAudio.current.play().catch(e => console.warn("Impossible de jouer le son de notification:", e));
+    }
+  };
+
   // Cleanup URLs
   useEffect(() => {
     return () => {
@@ -101,6 +118,24 @@ export default function App() {
   };
 
   const processBatch = async () => {
+    // --- ASTUCE NAVIGATEUR (Autoplay Policy) ---
+    // On débloque l'audio context au moment du clic utilisateur (avant le traitement long)
+    if (notificationAudio.current) {
+        try {
+            // On baisse le volume à 0, on joue, et on pause immédiatement.
+            // Cela marque l'élément audio comme "autorisé" par l'utilisateur.
+            const originalVolume = notificationAudio.current.volume;
+            notificationAudio.current.volume = 0;
+            await notificationAudio.current.play();
+            notificationAudio.current.pause();
+            notificationAudio.current.currentTime = 0;
+            notificationAudio.current.volume = originalVolume; // Rétablir le volume
+        } catch (e) {
+            console.log("Pré-chargement audio ignoré (probablement déjà prêt ou bloqué)", e);
+        }
+    }
+    // -------------------------------------------
+
     setIsProcessing(true);
     setError(null);
 
@@ -137,7 +172,11 @@ export default function App() {
          } : f));
        }
     }
+    
     setIsProcessing(false);
+    
+    // Jouer le son de notification à la fin
+    notifyEnd();
   };
 
   const handleTTS = async () => {
