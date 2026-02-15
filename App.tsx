@@ -16,7 +16,9 @@ import {
   Trash2,
   Plus,
   FolderDown,
-  Play
+  Play,
+  Bug,
+  Terminal
 } from 'lucide-react';
 import { AppMode, AudioFormat, BatchFile, ConverterConfig, SampleRate, ProcessingStatus } from './types';
 import { UploadZone } from './components/UploadZone';
@@ -51,20 +53,63 @@ export default function App() {
   // Global Error
   const [error, setError] = useState<string | null>(null);
 
+  // --- DEBUG SYSTEM ---
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const addLog = (msg: string) => {
+    const time = new Date().toLocaleTimeString();
+    setDebugLogs(prev => [`[${time}] ${msg}`, ...prev]);
+  };
+
   // Audio Notification Reference
   const notificationAudio = useRef<HTMLAudioElement | null>(null);
+  const AUDIO_PATH = '/sounds/MusiqueDuJeu.mp3';
 
-  // Initialize Audio
+  // Initialize Audio & Debug Checks
   useEffect(() => {
-    // Note: Assurez-vous que le fichier existe dans public/sounds/MusiqueDuJeu.mp3
-    notificationAudio.current = new Audio('/sounds/MusiqueDuJeu.mp3');
-    notificationAudio.current.volume = 0.5; // Volume confortable
+    addLog(`INITIALISATION: Tentative de chargement de ${AUDIO_PATH}`);
+
+    // 1. Vérification Réseau (Est-ce que le fichier existe ?)
+    fetch(AUDIO_PATH)
+      .then(res => {
+        if (res.ok) {
+          addLog(`RÉSEAU OK: Le fichier existe (Status: ${res.status}, Type: ${res.headers.get('content-type')})`);
+        } else {
+          addLog(`ERREUR RÉSEAU: Fichier introuvable ou erreur serveur (Status: ${res.status})`);
+        }
+      })
+      .catch(err => addLog(`ERREUR FETCH: Impossible d'atteindre le fichier. ${err.message}`));
+
+    // 2. Création de l'objet Audio
+    const audio = new Audio(AUDIO_PATH);
+    audio.volume = 0.5;
+
+    // 3. Écouteurs d'événements pour le débogage
+    audio.addEventListener('loadstart', () => addLog("AUDIO: Démarrage du chargement..."));
+    audio.addEventListener('canplaythrough', () => addLog("AUDIO: Fichier chargé et prêt à être joué (canplaythrough)."));
+    audio.addEventListener('error', (e) => {
+      const errorCodes = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
+      // @ts-ignore
+      const code = (e.target as HTMLAudioElement).error?.code;
+      // @ts-ignore
+      const msg = errorCodes[code] || "UNKNOWN";
+      addLog(`ERREUR AUDIO: Code ${code} (${msg}). Vérifiez le chemin et le format.`);
+    });
+    
+    notificationAudio.current = audio;
   }, []);
 
   // Fonction pour jouer le son à la fin
-  const notifyEnd = () => {
+  const notifyEnd = async () => {
+    addLog("NOTIFY: Tentative de lecture du son de fin...");
     if (notificationAudio.current) {
-      notificationAudio.current.play().catch(e => console.warn("Impossible de jouer le son de notification:", e));
+      try {
+        await notificationAudio.current.play();
+        addLog("NOTIFY: Son joué avec succès !");
+      } catch (e: any) {
+        addLog(`ERREUR LECTURE: ${e.name} - ${e.message}. (Souvent lié à l'Autoplay Policy si l'interaction utilisateur n'a pas été capturée)`);
+      }
+    } else {
+      addLog("ERREUR: L'objet Audio n'est pas initialisé.");
     }
   };
 
@@ -94,8 +139,7 @@ export default function App() {
     if (mode === AppMode.CONVERTER) {
       setFiles(prev => [...prev, ...newFiles]);
     } else {
-      // For Transcriber, currently single file logic in UI, but let's keep array struct
-      setFiles([newFiles[0]]); // Replace for single mode tools
+      setFiles([newFiles[0]]);
       setTranscription("");
     }
     setError(null);
@@ -118,20 +162,22 @@ export default function App() {
   };
 
   const processBatch = async () => {
+    addLog("PROCESS: Démarrage du traitement...");
+
     // --- ASTUCE NAVIGATEUR (Autoplay Policy) ---
-    // On débloque l'audio context au moment du clic utilisateur (avant le traitement long)
+    // On débloque l'audio context au moment du clic utilisateur
     if (notificationAudio.current) {
         try {
-            // On baisse le volume à 0, on joue, et on pause immédiatement.
-            // Cela marque l'élément audio comme "autorisé" par l'utilisateur.
+            addLog("AUTOPLAY: Tentative de déverrouillage audio (play/pause rapide)...");
             const originalVolume = notificationAudio.current.volume;
             notificationAudio.current.volume = 0;
             await notificationAudio.current.play();
             notificationAudio.current.pause();
             notificationAudio.current.currentTime = 0;
-            notificationAudio.current.volume = originalVolume; // Rétablir le volume
-        } catch (e) {
-            console.log("Pré-chargement audio ignoré (probablement déjà prêt ou bloqué)", e);
+            notificationAudio.current.volume = originalVolume;
+            addLog("AUTOPLAY: Audio déverrouillé avec succès !");
+        } catch (e: any) {
+            addLog(`AUTOPLAY ECHEC: Impossible de préparer l'audio. ${e.message}`);
         }
     }
     // -------------------------------------------
@@ -139,11 +185,9 @@ export default function App() {
     setIsProcessing(true);
     setError(null);
 
-    // Create a copy to update state
     const filesToProcess = files.filter(f => f.status !== ProcessingStatus.DONE);
     
     for (const fileItem of filesToProcess) {
-       // Update Status to Processing
        setFiles(prev => prev.map(f => f.id === fileItem.id ? { ...f, status: ProcessingStatus.PROCESSING, progress: 0 } : f));
 
        try {
@@ -170,12 +214,12 @@ export default function App() {
            status: ProcessingStatus.ERROR, 
            error: err instanceof Error ? err.message : "Erreur" 
          } : f));
+         addLog(`ERREUR FICHIER: ${fileItem.name} - ${err instanceof Error ? err.message : "Erreur inconnue"}`);
        }
     }
     
     setIsProcessing(false);
-    
-    // Jouer le son de notification à la fin
+    addLog("PROCESS: Traitement terminé. Appel de notifyEnd().");
     notifyEnd();
   };
 
@@ -202,6 +246,7 @@ export default function App() {
     setTranscription("");
     setError(null);
     setTtsResultUrl(null);
+    setDebugLogs([]); // Clear logs on reset if wanted, or keep them
   };
 
   // Feature: Save to "Convertion" folder with Robust Fallback
@@ -243,11 +288,8 @@ export default function App() {
     // @ts-ignore
     if (typeof window.showDirectoryPicker === 'function') {
       try {
-        // We try to invoke it. If we are in a cross-origin iframe (StackBlitz, etc.), this might throw immediately.
         // @ts-ignore
         const dirHandle = await window.showDirectoryPicker();
-        
-        // Create 'Convertion' subfolder
         const subDirHandle = await dirHandle.getDirectoryHandle('Convertion', { create: true });
 
         for (const fileItem of processedFiles) {
@@ -262,22 +304,17 @@ export default function App() {
         }
         alert("Fichiers sauvegardés avec succès dans le dossier 'Convertion' !");
       } catch (err: any) {
-        // If user cancelled, just stop
-        if (err.name === 'AbortError') {
-          return;
-        }
-        // If security error (iframe) or other error, fallback to ZIP
+        if (err.name === 'AbortError') return;
         console.warn("L'accès direct au dossier n'est pas permis (probablement une restriction iframe). Basculement vers ZIP.", err);
         await saveZip();
       }
     } else {
-      // API not supported, go straight to ZIP
       await saveZip();
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200">
+    <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col">
       {/* Navbar */}
       <nav className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
@@ -312,7 +349,7 @@ export default function App() {
       </nav>
 
       {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-4 py-12">
+      <main className="max-w-4xl mx-auto px-4 py-12 flex-grow">
         
         {/* Mobile Tabs */}
         <div className="md:hidden flex gap-2 mb-8 overflow-x-auto pb-2">
@@ -350,7 +387,7 @@ export default function App() {
         </div>
 
         {/* Main Card */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden mb-8">
           
           {/* TTS Input Mode */}
           {mode === AppMode.TTS ? (
@@ -607,6 +644,29 @@ export default function App() {
               )}
             </div>
           )}
+        </div>
+
+        {/* DEBUG CONSOLE SECTION */}
+        <div className="mt-8 bg-black/80 rounded-xl border border-slate-800 overflow-hidden font-mono text-xs">
+          <div className="px-4 py-2 bg-slate-900 border-b border-slate-800 flex items-center gap-2 text-slate-400">
+            <Terminal size={14} />
+            <span className="font-semibold">Console de Débogage Audio</span>
+          </div>
+          <div className="p-4 h-48 overflow-y-auto space-y-1">
+            {debugLogs.length === 0 ? (
+              <span className="text-slate-600 italic">En attente de logs...</span>
+            ) : (
+              debugLogs.map((log, i) => (
+                <div key={i} className={`
+                  ${log.includes("ERREUR") ? "text-red-400" : ""}
+                  ${log.includes("RÉSEAU OK") || log.includes("succès") ? "text-green-400" : ""}
+                  ${!log.includes("ERREUR") && !log.includes("succès") ? "text-slate-300" : ""}
+                `}>
+                  {log}
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
         {/* Info Footer */}
