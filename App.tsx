@@ -60,18 +60,20 @@ export default function App() {
     setDebugLogs(prev => [`[${time}] ${msg}`, ...prev]);
   };
 
-  // --- WEB AUDIO API REFERENCES ---
+  // --- AUDIO SYSTEM REFERENCES ---
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
+  // Fallback si Web Audio API échoue à décoder
+  const useHtmlAudioFallback = useRef<boolean>(false);
   
-  // Mise à jour du chemin vers le fichier WAV demandé
+  // Chemin du fichier
   const AUDIO_PATH = '/sounds/VieuxGueule.wav';
 
-  // Initialize Audio Context & Load File
+  // Initialize Audio Logic
   useEffect(() => {
     const initAudio = async () => {
       try {
-        addLog(`INITIALISATION: Démarrage Web Audio API...`);
+        addLog(`INITIALISATION: Démarrage Audio System...`);
         // @ts-ignore
         const CtxClass = window.AudioContext || window.webkitAudioContext;
         const ctx = new CtxClass();
@@ -84,16 +86,23 @@ export default function App() {
             if (!response.ok) throw new Error(`Status ${response.status} (File not found)`);
             
             const arrayBuffer = await response.arrayBuffer();
-            addLog(`DECODAGE: Décodage du fichier WAV (${arrayBuffer.byteLength} bytes)...`);
+            addLog(`DECODAGE: Tentative Web Audio API (${arrayBuffer.byteLength} bytes)...`);
             
-            // Tentative de décodage
-            const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
-            audioBufferRef.current = decodedBuffer;
-            addLog(`SUCCÈS: Audio chargé ! Durée: ${decodedBuffer.duration.toFixed(2)}s`);
+            try {
+              // Tentative 1: Web Audio API (Meilleure performance)
+              const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
+              audioBufferRef.current = decodedBuffer;
+              useHtmlAudioFallback.current = false;
+              addLog(`SUCCÈS: Web Audio API prêt ! Durée: ${decodedBuffer.duration.toFixed(2)}s`);
+            } catch (decodeErr: any) {
+              // Tentative 2: Fallback HTML5 Audio (Plus robuste sur les formats)
+              console.warn("Echec décodage Web Audio", decodeErr);
+              addLog(`INFO: Décodage strict échoué (${decodeErr.message}). Activation du mode HTML5 Audio.`);
+              useHtmlAudioFallback.current = true;
+            }
             
         } catch (loadErr: any) {
-            addLog(`ERREUR CHARGEMENT: Impossible de charger ${AUDIO_PATH}. ${loadErr.message}`);
-            addLog("Assurez-vous que le fichier 'VieuxGueule.wav' est bien dans le dossier 'public/sounds/'.");
+            addLog(`ERREUR CHARGEMENT: Impossible d'accéder à ${AUDIO_PATH}. ${loadErr.message}`);
         }
 
       } catch (e: any) {
@@ -110,23 +119,39 @@ export default function App() {
     };
   }, []);
 
-  // Fonction pour jouer le son à la fin via Web Audio API
+  // Fonction unifiée pour jouer le son
   const notifyEnd = () => {
-    if (!audioContextRef.current || !audioBufferRef.current) {
-      addLog("ERREUR NOTIFY: AudioContext non prêt ou fichier audio non chargé.");
+    // 1. Essai via Web Audio API (Prioritaire)
+    if (audioContextRef.current && audioBufferRef.current) {
+      try {
+        addLog("NOTIFY: Lecture via Web Audio API...");
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = audioBufferRef.current;
+        source.connect(audioContextRef.current.destination);
+        source.start(0);
+        return;
+      } catch (e: any) {
+        addLog(`ERREUR PLAY WEB AUDIO: ${e.message}`);
+      }
+    }
+
+    // 2. Essai via HTML5 Audio (Fallback)
+    if (useHtmlAudioFallback.current) {
+      addLog("NOTIFY: Lecture via HTML5 Audio (Fallback)...");
+      const audio = new Audio(AUDIO_PATH);
+      audio.play()
+        .then(() => addLog("NOTIFY: Lecture lancée."))
+        .catch(e => {
+          addLog(`ERREUR PLAY HTML5: ${e.message}`);
+          // Si autoplay bloqué, on le signale
+          if (e.name === 'NotAllowedError') {
+             addLog("INFO: Autoplay bloqué par le navigateur. Interaction requise.");
+          }
+        });
       return;
     }
 
-    try {
-      addLog("NOTIFY: Création de la source audio...");
-      const source = audioContextRef.current.createBufferSource();
-      source.buffer = audioBufferRef.current;
-      source.connect(audioContextRef.current.destination);
-      source.start(0);
-      addLog("NOTIFY: Lecture lancée !");
-    } catch (e: any) {
-      addLog(`ERREUR PLAY: ${e.message}`);
-    }
+    addLog("ERREUR NOTIFY: Aucun moyen de lecture disponible (Fichier non chargé ?)");
   };
 
   // Cleanup URLs
@@ -184,11 +209,10 @@ export default function App() {
     // On reprend le contexte audio au clic utilisateur s'il est suspendu
     if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
         try {
-            addLog("AUTOPLAY: Reprise du contexte audio (resume)...");
             await audioContextRef.current.resume();
-            addLog(`AUTOPLAY: Contexte actif (State: ${audioContextRef.current.state})`);
+            addLog(`AUTOPLAY: Contexte Audio repris.`);
         } catch (e: any) {
-            addLog(`AUTOPLAY ECHEC: Impossible de reprendre le contexte. ${e.message}`);
+            // Ignorer silencieusement si on est en mode HTML5
         }
     }
     // -------------------------------------------
@@ -670,7 +694,7 @@ export default function App() {
               debugLogs.map((log, i) => (
                 <div key={i} className={`
                   ${log.includes("ERREUR") || log.includes("ECHEC") ? "text-red-400" : ""}
-                  ${log.includes("SUCCÈS") ? "text-green-400" : ""}
+                  ${log.includes("SUCCÈS") || log.includes("lancée") ? "text-green-400" : ""}
                   ${!log.includes("ERREUR") && !log.includes("ECHEC") && !log.includes("SUCCÈS") ? "text-slate-300" : ""}
                 `}>
                   {log}
