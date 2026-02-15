@@ -61,52 +61,79 @@ export default function App() {
   };
 
   // --- AUDIO SYSTEM REFERENCES ---
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioBufferRef = useRef<AudioBuffer | null>(null);
-  // Fallback si Web Audio API échoue à décoder
-  const useHtmlAudioFallback = useRef<boolean>(false);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null); // Pour HTML5 Audio (Blob)
+  const audioContextRef = useRef<AudioContext | null>(null);    // Pour Web Audio API
   
   // Chemin du fichier
   const AUDIO_PATH = '/sounds/VieuxGueule.wav';
 
-  // Initialize Audio Logic
+  // Initialize Audio Logic Robust
   useEffect(() => {
     const initAudio = async () => {
       try {
-        addLog(`INITIALISATION: Démarrage Audio System...`);
+        addLog(`INIT: Démarrage du chargement audio...`);
+        
+        // 1. Fetch brut
+        const response = await fetch(AUDIO_PATH);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const arrayBuffer = await response.arrayBuffer();
+        addLog(`DL: ${arrayBuffer.byteLength} octets reçus.`);
+
+        // 2. Analyse des "Magic Bytes" pour identifier le vrai format
+        const view = new DataView(arrayBuffer);
+        let header = "";
+        try {
+            // Lire les 4 premiers octets ASCII
+            for(let i=0; i<4; i++) header += String.fromCharCode(view.getUint8(i));
+        } catch(e) { header = "ERR"; }
+
+        addLog(`HEADER DETECTÉ: "${header}"`);
+
+        // Diagnostic d'erreur fréquent : Fichier HTML au lieu d'audio
+        if (header !== 'RIFF' && header !== 'ID3' && header !== 'OggS') {
+           const textPreview = new TextDecoder().decode(arrayBuffer.slice(0, 50));
+           if (textPreview.includes("<!DOCTYPE") || textPreview.includes("<html")) {
+               addLog("ERREUR CRITIQUE: Le fichier est une page HTML (404 ou erreur serveur).");
+               addLog("SOLUTION: Vérifiez que 'VieuxGueule.wav' est bien dans le dossier 'public/sounds/'.");
+               return;
+           }
+           addLog("INFO: En-tête inconnu, tentative de lecture forcée...");
+        }
+
+        // 3. Création d'un Blob URL typé (Force le navigateur à le voir comme du WAV)
+        // Si l'en-tête est 'RIFF', c'est un WAV. Si c'est 'ID3', c'est un MP3.
+        let mimeType = 'audio/wav'; 
+        if (header === 'ID3') mimeType = 'audio/mpeg';
+        
+        const audioBlob = new Blob([arrayBuffer], { type: mimeType });
+        const blobUrl = URL.createObjectURL(audioBlob);
+        addLog(`BLOB: Créé avec mime '${mimeType}'`);
+
+        // 4. Configuration Lecteur HTML5 (Méthode la plus compatible)
+        const audioObj = new Audio(blobUrl);
+        audioObj.preload = 'auto';
+        
+        audioObj.oncanplaythrough = () => {
+            addLog("AUDIO PRÊT: Le fichier est valide et chargé.");
+        };
+        
+        audioObj.onerror = (e) => {
+            // Fix: e can be Event or string, we safely extract error only if it's an Event
+            const err = (e instanceof Event) ? (e.target as HTMLAudioElement).error : null;
+            addLog(`ERREUR LECTEUR: Code ${err?.code}, Message '${err?.message}'`);
+        };
+
+        audioPlayerRef.current = audioObj;
+
+        // 5. Initialisation Web Audio API (Juste pour débloquer l'autoplay policy du navigateur)
         // @ts-ignore
         const CtxClass = window.AudioContext || window.webkitAudioContext;
         const ctx = new CtxClass();
         audioContextRef.current = ctx;
 
-        addLog(`FETCH: Téléchargement de ${AUDIO_PATH}...`);
-        
-        try {
-            const response = await fetch(AUDIO_PATH);
-            if (!response.ok) throw new Error(`Status ${response.status} (File not found)`);
-            
-            const arrayBuffer = await response.arrayBuffer();
-            addLog(`DECODAGE: Tentative Web Audio API (${arrayBuffer.byteLength} bytes)...`);
-            
-            try {
-              // Tentative 1: Web Audio API (Meilleure performance)
-              const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
-              audioBufferRef.current = decodedBuffer;
-              useHtmlAudioFallback.current = false;
-              addLog(`SUCCÈS: Web Audio API prêt ! Durée: ${decodedBuffer.duration.toFixed(2)}s`);
-            } catch (decodeErr: any) {
-              // Tentative 2: Fallback HTML5 Audio (Plus robuste sur les formats)
-              console.warn("Echec décodage Web Audio", decodeErr);
-              addLog(`INFO: Décodage strict échoué (${decodeErr.message}). Activation du mode HTML5 Audio.`);
-              useHtmlAudioFallback.current = true;
-            }
-            
-        } catch (loadErr: any) {
-            addLog(`ERREUR CHARGEMENT: Impossible d'accéder à ${AUDIO_PATH}. ${loadErr.message}`);
-        }
-
       } catch (e: any) {
-        addLog(`ERREUR CRITIQUE AUDIO: ${e.message}`);
+        addLog(`ERREUR CRITIQUE: ${e.message}`);
       }
     };
 
@@ -120,38 +147,43 @@ export default function App() {
   }, []);
 
   // Fonction unifiée pour jouer le son
-  const notifyEnd = () => {
-    // 1. Essai via Web Audio API (Prioritaire)
-    if (audioContextRef.current && audioBufferRef.current) {
-      try {
-        addLog("NOTIFY: Lecture via Web Audio API...");
-        const source = audioContextRef.current.createBufferSource();
-        source.buffer = audioBufferRef.current;
-        source.connect(audioContextRef.current.destination);
-        source.start(0);
-        return;
-      } catch (e: any) {
-        addLog(`ERREUR PLAY WEB AUDIO: ${e.message}`);
-      }
+  const notifyEnd = async () => {
+    addLog("NOTIFY: Demande de lecture...");
+
+    // Tenter de débloquer l'audio context (nécessaire sur Chrome/Safari)
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        try {
+            await audioContextRef.current.resume();
+            addLog("AUTOPLAY: Contexte Audio débloqué.");
+        } catch (e) {
+            console.error(e);
+        }
     }
 
-    // 2. Essai via HTML5 Audio (Fallback)
-    if (useHtmlAudioFallback.current) {
-      addLog("NOTIFY: Lecture via HTML5 Audio (Fallback)...");
-      const audio = new Audio(AUDIO_PATH);
-      audio.play()
-        .then(() => addLog("NOTIFY: Lecture lancée."))
-        .catch(e => {
-          addLog(`ERREUR PLAY HTML5: ${e.message}`);
-          // Si autoplay bloqué, on le signale
-          if (e.name === 'NotAllowedError') {
-             addLog("INFO: Autoplay bloqué par le navigateur. Interaction requise.");
-          }
-        });
-      return;
+    // Lecture via l'objet Audio HTML5 préparé
+    if (audioPlayerRef.current) {
+        try {
+            audioPlayerRef.current.currentTime = 0;
+            const playPromise = audioPlayerRef.current.play();
+            
+            if (playPromise !== undefined) {
+                playPromise
+                .then(() => {
+                    addLog("NOTIFY: Lecture en cours !");
+                })
+                .catch(error => {
+                    addLog(`ERREUR PLAY: ${error.message}`);
+                    if (error.name === 'NotAllowedError') {
+                        addLog("INFO: Cliquez sur la page pour autoriser le son.");
+                    }
+                });
+            }
+        } catch (e: any) {
+             addLog(`EXCEPTION PLAY: ${e.message}`);
+        }
+    } else {
+        addLog("ERREUR NOTIFY: Aucun fichier audio chargé.");
     }
-
-    addLog("ERREUR NOTIFY: Aucun moyen de lecture disponible (Fichier non chargé ?)");
   };
 
   // Cleanup URLs
@@ -204,18 +236,11 @@ export default function App() {
 
   const processBatch = async () => {
     addLog("PROCESS: Démarrage du traitement...");
-
-    // --- ASTUCE NAVIGATEUR (Autoplay Policy - Web Audio API) ---
-    // On reprend le contexte audio au clic utilisateur s'il est suspendu
+    
+    // Tentative de reprise du contexte audio au clic utilisateur (Crucial)
     if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-        try {
-            await audioContextRef.current.resume();
-            addLog(`AUTOPLAY: Contexte Audio repris.`);
-        } catch (e: any) {
-            // Ignorer silencieusement si on est en mode HTML5
-        }
+        audioContextRef.current.resume().catch(() => {});
     }
-    // -------------------------------------------
 
     setIsProcessing(true);
     setError(null);
@@ -254,8 +279,10 @@ export default function App() {
     }
     
     setIsProcessing(false);
-    addLog("PROCESS: Traitement terminé. Appel de notifyEnd().");
-    notifyEnd();
+    addLog("PROCESS: Traitement terminé.");
+    
+    // Appel à la notification sonore
+    await notifyEnd();
   };
 
   const handleTTS = async () => {
