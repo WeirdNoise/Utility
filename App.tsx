@@ -60,56 +60,70 @@ export default function App() {
     setDebugLogs(prev => [`[${time}] ${msg}`, ...prev]);
   };
 
-  // Audio Notification Reference
-  const notificationAudio = useRef<HTMLAudioElement | null>(null);
+  // --- WEB AUDIO API REFERENCES ---
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioBufferRef = useRef<AudioBuffer | null>(null);
   const AUDIO_PATH = '/sounds/MusiqueDuJeu.mp3';
 
-  // Initialize Audio & Debug Checks
+  // Initialize Audio Context & Load File
   useEffect(() => {
-    addLog(`INITIALISATION: Tentative de chargement de ${AUDIO_PATH}`);
+    const initAudio = async () => {
+      try {
+        addLog(`INITIALISATION: Démarrage Web Audio API...`);
+        // @ts-ignore
+        const CtxClass = window.AudioContext || window.webkitAudioContext;
+        const ctx = new CtxClass();
+        audioContextRef.current = ctx;
 
-    // 1. Vérification Réseau (Est-ce que le fichier existe ?)
-    fetch(AUDIO_PATH)
-      .then(res => {
-        if (res.ok) {
-          addLog(`RÉSEAU OK: Le fichier existe (Status: ${res.status}, Type: ${res.headers.get('content-type')})`);
-        } else {
-          addLog(`ERREUR RÉSEAU: Fichier introuvable ou erreur serveur (Status: ${res.status})`);
+        addLog(`FETCH: Téléchargement de ${AUDIO_PATH}...`);
+        const response = await fetch(AUDIO_PATH);
+        
+        if (!response.ok) {
+          throw new Error(`Erreur HTTP ${response.status} pour le fichier audio.`);
         }
-      })
-      .catch(err => addLog(`ERREUR FETCH: Impossible d'atteindre le fichier. ${err.message}`));
+        
+        const arrayBuffer = await response.arrayBuffer();
+        addLog(`DECODAGE: Décodage du fichier audio (${arrayBuffer.byteLength} bytes)...`);
+        
+        // Décodage des données audio
+        try {
+          const decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
+          audioBufferRef.current = decodedBuffer;
+          addLog(`SUCCÈS: Audio chargé en mémoire ! Durée: ${decodedBuffer.duration.toFixed(2)}s`);
+        } catch (decodeErr: any) {
+          addLog(`ERREUR DECODAGE: Le fichier est peut-être corrompu ou format non supporté. ${decodeErr.message}`);
+        }
 
-    // 2. Création de l'objet Audio
-    const audio = new Audio(AUDIO_PATH);
-    audio.volume = 0.5;
+      } catch (e: any) {
+        addLog(`ERREUR INITIALISATION AUDIO: ${e.message}`);
+      }
+    };
 
-    // 3. Écouteurs d'événements pour le débogage
-    audio.addEventListener('loadstart', () => addLog("AUDIO: Démarrage du chargement..."));
-    audio.addEventListener('canplaythrough', () => addLog("AUDIO: Fichier chargé et prêt à être joué (canplaythrough)."));
-    audio.addEventListener('error', (e) => {
-      const errorCodes = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
-      // @ts-ignore
-      const code = (e.target as HTMLAudioElement).error?.code;
-      // @ts-ignore
-      const msg = errorCodes[code] || "UNKNOWN";
-      addLog(`ERREUR AUDIO: Code ${code} (${msg}). Vérifiez le chemin et le format.`);
-    });
-    
-    notificationAudio.current = audio;
+    initAudio();
+
+    return () => {
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+      }
+    };
   }, []);
 
-  // Fonction pour jouer le son à la fin
-  const notifyEnd = async () => {
-    addLog("NOTIFY: Tentative de lecture du son de fin...");
-    if (notificationAudio.current) {
-      try {
-        await notificationAudio.current.play();
-        addLog("NOTIFY: Son joué avec succès !");
-      } catch (e: any) {
-        addLog(`ERREUR LECTURE: ${e.name} - ${e.message}. (Souvent lié à l'Autoplay Policy si l'interaction utilisateur n'a pas été capturée)`);
-      }
-    } else {
-      addLog("ERREUR: L'objet Audio n'est pas initialisé.");
+  // Fonction pour jouer le son à la fin via Web Audio API
+  const notifyEnd = () => {
+    if (!audioContextRef.current || !audioBufferRef.current) {
+      addLog("ERREUR NOTIFY: AudioContext non prêt ou buffer vide.");
+      return;
+    }
+
+    try {
+      addLog("NOTIFY: Création de la source audio...");
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = audioBufferRef.current;
+      source.connect(audioContextRef.current.destination);
+      source.start(0);
+      addLog("NOTIFY: Commande de lecture envoyée.");
+    } catch (e: any) {
+      addLog(`ERREUR PLAY: ${e.message}`);
     }
   };
 
@@ -164,20 +178,15 @@ export default function App() {
   const processBatch = async () => {
     addLog("PROCESS: Démarrage du traitement...");
 
-    // --- ASTUCE NAVIGATEUR (Autoplay Policy) ---
-    // On débloque l'audio context au moment du clic utilisateur
-    if (notificationAudio.current) {
+    // --- ASTUCE NAVIGATEUR (Autoplay Policy - Web Audio API) ---
+    // On reprend le contexte audio au clic utilisateur s'il est suspendu
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
         try {
-            addLog("AUTOPLAY: Tentative de déverrouillage audio (play/pause rapide)...");
-            const originalVolume = notificationAudio.current.volume;
-            notificationAudio.current.volume = 0;
-            await notificationAudio.current.play();
-            notificationAudio.current.pause();
-            notificationAudio.current.currentTime = 0;
-            notificationAudio.current.volume = originalVolume;
-            addLog("AUTOPLAY: Audio déverrouillé avec succès !");
+            addLog("AUTOPLAY: Reprise du contexte audio (resume)...");
+            await audioContextRef.current.resume();
+            addLog(`AUTOPLAY: Contexte actif (State: ${audioContextRef.current.state})`);
         } catch (e: any) {
-            addLog(`AUTOPLAY ECHEC: Impossible de préparer l'audio. ${e.message}`);
+            addLog(`AUTOPLAY ECHEC: Impossible de reprendre le contexte. ${e.message}`);
         }
     }
     // -------------------------------------------
@@ -246,7 +255,7 @@ export default function App() {
     setTranscription("");
     setError(null);
     setTtsResultUrl(null);
-    setDebugLogs([]); // Clear logs on reset if wanted, or keep them
+    setDebugLogs([]);
   };
 
   // Feature: Save to "Convertion" folder with Robust Fallback
@@ -659,8 +668,8 @@ export default function App() {
               debugLogs.map((log, i) => (
                 <div key={i} className={`
                   ${log.includes("ERREUR") ? "text-red-400" : ""}
-                  ${log.includes("RÉSEAU OK") || log.includes("succès") ? "text-green-400" : ""}
-                  ${!log.includes("ERREUR") && !log.includes("succès") ? "text-slate-300" : ""}
+                  ${log.includes("RÉSEAU OK") || log.includes("SUCCÈS") ? "text-green-400" : ""}
+                  ${!log.includes("ERREUR") && !log.includes("SUCCÈS") ? "text-slate-300" : ""}
                 `}>
                   {log}
                 </div>
