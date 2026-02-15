@@ -65,7 +65,7 @@ export default function App() {
   const audioContextRef = useRef<AudioContext | null>(null);    // Pour Web Audio API
   
   // Chemin du fichier
-  const AUDIO_PATH = '/sounds/VieuxGueule.wav';
+  const AUDIO_PATH = '/sounds/VieuxGueule.mp3';
 
   // Initialize Audio Logic Robust
   useEffect(() => {
@@ -91,20 +91,23 @@ export default function App() {
         addLog(`HEADER DETECTÉ: "${header}"`);
 
         // Diagnostic d'erreur fréquent : Fichier HTML au lieu d'audio
+        // Note: ID3 est le header standard pour les MP3 avec métadonnées
+        // Les MP3 sans tags peuvent ne pas avoir ID3 mais fonctionneront quand même avec le mime type correct.
         if (header !== 'RIFF' && header !== 'ID3' && header !== 'OggS') {
            const textPreview = new TextDecoder().decode(arrayBuffer.slice(0, 50));
            if (textPreview.includes("<!DOCTYPE") || textPreview.includes("<html")) {
                addLog("ERREUR CRITIQUE: Le fichier est une page HTML (404 ou erreur serveur).");
-               addLog("SOLUTION: Vérifiez que 'VieuxGueule.wav' est bien dans le dossier 'public/sounds/'.");
+               addLog("SOLUTION: Vérifiez que 'VieuxGueule.mp3' est bien dans le dossier 'public/sounds/'.");
                return;
            }
-           addLog("INFO: En-tête inconnu, tentative de lecture forcée...");
+           // Si ce n'est pas ID3, ça peut être un MP3 brut (frame sync 0xFFFB), on continue.
+           addLog("INFO: En-tête non-standard détecté, poursuite du chargement...");
         }
 
-        // 3. Création d'un Blob URL typé (Force le navigateur à le voir comme du WAV)
-        // Si l'en-tête est 'RIFF', c'est un WAV. Si c'est 'ID3', c'est un MP3.
-        let mimeType = 'audio/wav'; 
-        if (header === 'ID3') mimeType = 'audio/mpeg';
+        // 3. Création d'un Blob URL typé
+        let mimeType = 'audio/mpeg'; // Défaut MP3
+        if (header === 'RIFF') mimeType = 'audio/wav';
+        if (header === 'OggS') mimeType = 'audio/ogg';
         
         const audioBlob = new Blob([arrayBuffer], { type: mimeType });
         const blobUrl = URL.createObjectURL(audioBlob);
@@ -119,7 +122,6 @@ export default function App() {
         };
         
         audioObj.onerror = (e) => {
-            // Fix: e can be Event or string, we safely extract error only if it's an Event
             const err = (e instanceof Event) ? (e.target as HTMLAudioElement).error : null;
             addLog(`ERREUR LECTEUR: Code ${err?.code}, Message '${err?.message}'`);
         };
